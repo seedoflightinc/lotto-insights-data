@@ -1,0 +1,48 @@
+name: Update official draw history
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 10,18 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: official-draw-history
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PDF extractor
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: Test validation
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Restore last published feed
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --heads origin history-data; then
+            git fetch origin history-data:refs/remotes/origin/history-data
+            git show FETCH_HEAD:florida-lotto.json > /tmp/previous-feed.json
+            cp /tmp/previous-feed.json data/florida-lotto.json
+          fi
+      - name: Download and validate official history
+        run: python3 tools/update_history.py
+      - name: Publish validated feed to dedicated branch
+        shell: bash
+        run: |
+          cp data/florida-lotto.json /tmp/validated-feed.json
+          git restore data/florida-lotto.json
+          if git show-ref --verify --quiet refs/remotes/origin/history-data; then
+            git checkout -B history-data origin/history-data
+          else
+            git checkout --orphan history-data
+            git rm -rf .
+          fi
+          cp /tmp/validated-feed.json florida-lotto.json
+          git add florida-lotto.json
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'lotto-history-updater'
+          git config user.email 'lotto-history-updater@users.noreply.github.com'
+          git commit -m 'Update validated official draw history'
+          git push origin HEAD:history-data
